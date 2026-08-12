@@ -3,11 +3,13 @@ import requests
 import os
 import json
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE (XAUUSD ONLY)
+# AUGURNOVA - GOLD MODE v1.1 (XAUUSD ONLY)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
+# Patch v1.1: แก้บั๊กคำซ่อน + เข้าใจภาษาดอกเบี้ยผ่อนคลาย
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -20,15 +22,19 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # ---------- คำที่บอกว่าข่าวนี้เกี่ยวกับทอง ----------
 GOLD_WORDS = ['gold', 'xau', 'bullion', 'precious', 'safe haven', 'safe-haven']
 
-# ---------- คำที่ดันทอง "ขึ้น" (ความกลัว / ความเสี่ยง) ----------
+# ---------- ⬆️ ดันทองขึ้น: ความกลัว / ความเสี่ยง ----------
 HAVEN_WORDS = ['war', 'attack', 'invasion', 'escalat', 'crisis', 'panic',
                'crash', 'emergency', 'conflict', 'missile', 'tension',
                'recession', 'fear', 'geopolitic', 'bank collapse']
 
-# ---------- คำที่กดทอง "ลง" (ดอกเบี้ยขาขึ้น / ดอลลาร์แข็ง) ----------
+# ---------- 🕊️ ดันทองขึ้น: ดอกเบี้ยผ่อนคลาย / เงินเฟ้อเย็น ----------
+DOVISH_WORDS = ['cool', 'eases', 'easing', 'soften', 'dovish', 'rate cut',
+                'cuts rates', 'cut rates', 'lower rates', 'disinflation']
+
+# ---------- ⬇️ กดทองลง: ดอกเบี้ยขาขึ้น / ดอลลาร์แข็ง ----------
 HAWK_WORDS = ['rate hike', 'hike', 'hawkish', 'higher rate', 'yields rise',
               'yields climb', 'dollar firm', 'dollar rise', 'strong jobs',
-              'tightening', 'fed official', 'rate-cut bets fade']
+              'tightening', 'fed official']
 
 # ---------- แหล่งข่าว ----------
 RSS_FEEDS = [
@@ -38,7 +44,7 @@ RSS_FEEDS = [
     'https://www.kitco.com/rss',
 ]
 
-SEEN_FILE = 'seen_gold.json'
+SEEN_FILE = 'seen_gold_v2.json'
 TH_TZ = timezone(timedelta(hours=7))
 
 
@@ -63,7 +69,9 @@ def article_id(entry):
 
 
 def find_words(text, words):
-    return [w for w in words if w in text]
+    # \b = คำต้องขึ้นต้นที่ขอบคำเท่านั้น
+    # แก้บั๊ก: to"war"d และ exten"sion" จะไม่โดนจับอีก
+    return [w for w in words if re.search(r'\b' + re.escape(w), text)]
 
 
 def send_telegram(message):
@@ -80,8 +88,8 @@ def scan_news():
     seen = load_seen()
     alerts = []
     total_impact = 0
-    total_haven = 0
-    total_hawk = 0
+    total_up = 0
+    total_down = 0
 
     for feed_url in RSS_FEEDS:
         try:
@@ -99,18 +107,26 @@ def scan_news():
 
                 gold_hit = find_words(t, GOLD_WORDS)
                 haven_hit = find_words(t, HAVEN_WORDS)
+                dovish_hit = find_words(t, DOVISH_WORDS)
                 hawk_hit = find_words(t, HAWK_WORDS)
 
-                haven_score = len(haven_hit) * 10
-                hawk_score = len(hawk_hit) * 10
+                # กฎ v1.1: กริยา dovish ชนะคำ hike
+                # เช่น "cools the rate hike talk" = ข่าวดีของทอง
+                if dovish_hit:
+                    hawk_hit = [w for w in hawk_hit
+                                if w not in ('hike', 'rate hike', 'higher rate')]
+
+                up_score = (len(haven_hit) + len(dovish_hit)) * 10
+                down_score = len(hawk_hit) * 10
                 bonus = 5 if gold_hit else 0
 
-                impact = haven_score + hawk_score + bonus
+                impact = up_score + down_score + bonus
                 if impact >= 10:
                     total_impact += impact
-                    total_haven += haven_score
-                    total_hawk += hawk_score
-                    alerts.append((impact, title, link, gold_hit, haven_hit, hawk_hit))
+                    total_up += up_score
+                    total_down += down_score
+                    alerts.append((impact, title, link, gold_hit,
+                                   haven_hit, dovish_hit, hawk_hit))
         except Exception as e:
             print("Feed error:", feed_url, e)
 
@@ -127,28 +143,30 @@ def scan_news():
     else:
         level = "⚡ MEDIUM - เริ่มมีข่าวกระทบทอง เฝ้าจอไว้"
 
-    if total_haven - total_hawk >= 10:
-        direction = "📈 เอียง 'ขึ้น' : แรงซื้อสินทรัพย์ปลอดภัยนำ"
-    elif total_hawk - total_haven >= 10:
+    if total_up - total_down >= 10:
+        direction = "📈 เอียง 'ขึ้น' : แรงซื้อสินทรัพย์ปลอดภัย/ dovish นำ"
+    elif total_down - total_up >= 10:
         direction = "📉 เอียง 'ลง' : แรงกดดันดอกเบี้ย/ดอลลาร์นำ"
     else:
         direction = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
     now_th = datetime.now(TH_TZ)
-    msg = "🧙‍️ AUGURNOVA  GOLD MODE\n"
+    msg = "🧙‍️ AUGURNOVA  GOLD MODE v1.1\n"
     msg += level + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += direction + "\n"
     msg += "━━━━━━━━━━━━━━━\n"
-    for i, (impact, title, link, g, up, dn) in enumerate(alerts[:5], 1):
+    for i, (impact, title, link, g, hav, dov, hawk) in enumerate(alerts[:5], 1):
         msg += f"{i}. {title}\n"
         tags = []
         if g:
             tags.append("🥇 " + ", ".join(g))
-        if up:
-            tags.append("⬆️ " + ", ".join(up))
-        if dn:
-            tags.append("⬇️ " + ", ".join(dn))
+        if hav:
+            tags.append("⬆️ " + ", ".join(hav))
+        if dov:
+            tags.append("🕊️ " + ", ".join(dov))
+        if hawk:
+            tags.append("⬇️ " + ", ".join(hawk))
         msg += "   " + " | ".join(tags) + f" (impact {impact})\n"
         msg += f"   {link}\n"
     msg += "━━━━━━━━━━━━━━━\n"
