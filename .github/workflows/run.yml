@@ -1,0 +1,35 @@
+name: AugurNOVA Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache seen news
+        uses: actions/cache@v4
+        with:
+          path: seen_news.json
+          key: augurnova-seen-${{ github.run_id }}
+          restore-keys: |
+            augurnova-seen-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements*.txt
+
+      - name: Run AugurNOVA
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python augur_nova*.py
