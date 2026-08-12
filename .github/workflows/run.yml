@@ -15,7 +15,7 @@ jobs:
       - name: Cache seen news
         uses: actions/cache@v4
         with:
-          path: seen_news.json
+          path: seen_*.json
           key: augurnova-seen-${{ github.run_id }}
           restore-keys: |
             augurnova-seen-
@@ -32,4 +32,4 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python augur_nova*.py
+        run: python gold_oracle.py
