@@ -4,14 +4,12 @@ import os
 import json
 import hashlib
 import re
-import time
-from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.2.2 (Phase 2: Sentiment)
+# AUGURNOVA - GOLD MODE v1.2.3 (Phase 2: Sentiment)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
-# + 5 ประตูข้อมูลมวลชน + แคช 30 นาที (มารยาทดี)
+# + มวลชนจาก API กระดานเทรด (Binance/Bybit) สดทุก 5 นาที
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -42,11 +40,7 @@ RSS_FEEDS = [
     'https://www.kitco.com/rss',
 ]
 
-SENTIMENT_URL = 'https://www.myfxbook.com/community/outlook/XAUUSD'
-SEEN_FILE = 'seen_gold_v2.json'
 CROWD_FILE = 'seen_crowd.json'
-SENTI_CACHE = 'seen_senti.json'
-SENTI_TTL = 600
 TH_TZ = timezone(timedelta(hours=7))
 
 CROWDED = 70
@@ -69,7 +63,7 @@ def save_json(path, data):
 
 
 def load_seen():
-    s = load_json(SEEN_FILE)
+    s = load_json('seen_gold_v2.json')
     return set(s) if s else set()
 
 
@@ -82,50 +76,50 @@ def find_words(text, words):
     return [w for w in words if re.search(r'\b' + re.escape(w), text)]
 
 
-def _parse_myfxbook(html):
-    m_short = re.search(r'(\d+)\s*%\s*of the forex traders are currently going short', html)
-    m_long = re.search(r'(\d+)\s*%\s*of the forex traders are going long', html)
-    if m_long and m_short:
-        return int(m_long.group(1)), int(m_short.group(1))
-    return None
-
-
 def fetch_sentiment():
-    doors = [
-        ('direct', SENTIMENT_URL),
-        ('jina-reader', 'https://r.jina.ai/' + SENTIMENT_URL),
-        ('allorigins', 'https://api.allorigins.win/raw?url=' + quote(SENTIMENT_URL)),
-        ('corsproxy', 'https://corsproxy.io/?url=' + quote(SENTIMENT_URL)),
-        ('codetabs', 'https://api.codetabs.com/v1/proxy/?quest=' + quote(SENTIMENT_URL)),
-    ]
-    headers = {'User-Agent': feedparser.USER_AGENT,
-               'Accept-Language': 'en-US,en;q=0.9'}
-    for name, url in doors:
-        try:
-            r = requests.get(url, headers=headers, timeout=25)
-            if r.status_code == 200:
-                parsed = _parse_myfxbook(r.text)
-                if parsed:
-                    print("Sentiment via:", name, "->", parsed)
-                    return parsed
-                print(f"Sentiment {name}: เปิดได้แต่อ่านไม่เจอข้อมูล")
-            else:
-                print(f"Sentiment {name}: HTTP", r.status_code)
-        except Exception as e:
-            print(f"Sentiment {name} error:", e)
+    """มวลชนสายเก็งกำไรทอง: อัตราส่วน Long/Short ของ PAXGUSDT (สดทุก 5 นาที)"""
+    # ประตู 1: Binance
+    try:
+        r = requests.get(
+            'https://futures.binance.com/futures/data/globalLongShortAccountRatio',
+            params={'symbol': 'PAXGUSDT', 'period': '5m', 'limit': 1},
+            headers={'User-Agent': feedparser.USER_AGENT}, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            if data and isinstance(data, list) and 'longAccount' in data[0]:
+                lp = round(float(data[0]['longAccount']) * 100)
+                sp = round(float(data[0]['shortAccount']) * 100)
+                print("Sentiment via: binance ->", (lp, sp))
+                return (lp, sp)
+            print("Sentiment binance: ไม่มีข้อมูล PAXGUSDT")
+        else:
+            print("Sentiment binance: HTTP", r.status_code)
+    except Exception as e:
+        print("Sentiment binance error:", e)
+
+    # ประตู 2: Bybit
+    try:
+        r = requests.get(
+            'https://api.bybit.com/v5/market/account-ratio',
+            params={'category': 'linear', 'symbol': 'PAXGUSDT',
+                    'period': '5min', 'limit': 1},
+            headers={'User-Agent': feedparser.USER_AGENT}, timeout=15)
+        if r.status_code == 200:
+            j = r.json()
+            lst = j.get('result', {}).get('list', [])
+            if lst and 'buyRatio' in lst[0]:
+                lp = round(float(lst[0]['buyRatio']) * 100)
+                sp = round(float(lst[0]['sellRatio']) * 100)
+                print("Sentiment via: bybit ->", (lp, sp))
+                return (lp, sp)
+            print("Sentiment bybit: ไม่มีข้อมูล PAXGUSDT")
+        else:
+            print("Sentiment bybit: HTTP", r.status_code)
+    except Exception as e:
+        print("Sentiment bybit error:", e)
+
     print("Sentiment: ทุกประตูปิดสนิท")
     return None
-
-
-def get_sentiment():
-    cached = load_json(SENTI_CACHE)
-    if cached and (time.time() - cached.get('time', 0) < SENTI_TTL):
-        print("Sentiment: ใช้ค่าแคช", cached.get('data'))
-        return tuple(cached.get('data'))
-    data = fetch_sentiment()
-    if data:
-        save_json(SENTI_CACHE, {'time': time.time(), 'data': list(data)})
-    return data
 
 
 def crowd_state(long_pct):
@@ -144,7 +138,7 @@ def crowd_label(state, senti):
     lp, sp = senti
     name = {'BALANCED': 'สมดุล', 'CROWDED_BUY': 'แออัด BUY!',
             'CROWDED_SELL': 'แออัด SELL!'}.get(state, '-')
-    return f"👥 มวลชน: Long {lp}% / Short {sp}% → {name}"
+    return f"👥 มวลชนเก็งกำไรทอง: Long {lp}% / Short {sp}% → {name}"
 
 
 def combined_verdict(direction, state):
@@ -175,7 +169,7 @@ def send_telegram(message):
 
 def scan_news():
     seen = load_seen()
-    senti = get_sentiment()
+    senti = fetch_sentiment()
     state = crowd_state(senti[0] if senti else None)
 
     alerts = []
@@ -220,7 +214,7 @@ def scan_news():
         except Exception as e:
             print("Feed error:", feed_url, e)
 
-    save_json(SEEN_FILE, list(seen)[-500:])
+    save_json('seen_gold_v2.json', list(seen)[-500:])
 
     now_th = datetime.now(TH_TZ)
     time_str = now_th.strftime("%d/%m/%Y %H:%M") + " (เวลาไทย)"
@@ -234,12 +228,12 @@ def scan_news():
             lp, sp = senti
             if state == 'CROWDED_BUY':
                 msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN MODE\n"
-                       f"รายย่อยแออัด BUY สุดขั้ว {lp}% โดยไม่มีข่าวแรงหนุน\n"
+                       f"มวลชนแออัด BUY สุดขั้ว {lp}% โดยไม่มีข่าวแรงหนุน\n"
                        "⚠️ Smart Money อาจทุบลงกินสภาพคล่องก่อน\n"
                        "💡 มองหา Sell ตอนดีด / อย่าไล่ Buy\n")
             else:
                 msg = ("🧙‍️ AUGURNOVA  CONTRARIAN MODE\n"
-                       f"รายย่อยแออัด SELL สุดขั้ว {sp}% โดยไม่มีข่าวแรงกด\n"
+                       f"มวลชนแออัด SELL สุดขั้ว {sp}% โดยไม่มีข่าวแรงกด\n"
                        "⚠️ Smart Money อาจดีดขึ้นกินสภาพคล่องก่อน\n"
                        "💡 มองหา Buy ตอนย่อ / อย่าไล่ Sell\n")
             msg += crowd_label(state, senti) + "\n"
@@ -272,7 +266,7 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.2\n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.3\n"
     msg += level + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += dir_txt + "\n"
