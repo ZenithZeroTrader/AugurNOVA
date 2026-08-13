@@ -7,9 +7,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.2.5 (Phase 2: Sentiment)
+# AUGURNOVA - GOLD MODE v1.2.6 (Phase 2: Sentiment)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
-# + วัดความแออัดด้วย Funding Rate (fapi/OKX) สดจริง
+# + Flow มวลชนจากเทรดจริง PAXG (OKX) — ประตูที่กันบอทไม่ได้
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -43,8 +43,8 @@ RSS_FEEDS = [
 CROWD_FILE = 'seen_crowd.json'
 TH_TZ = timezone(timedelta(hours=7))
 
-CROWDED = 0.03    # funding % ที่ถือว่าแออัด
-EXTREME = 0.06    # funding % ที่ถือว่าสุดขั้ว
+CROWDED = 70
+EXTREME = 75
 
 
 def load_json(path):
@@ -76,60 +76,52 @@ def find_words(text, words):
     return [w for w in words if re.search(r'\b' + re.escape(w), text)]
 
 
-def fetch_funding():
-    """ดึง Funding Rate ของ PAXG (ทองโทเคน) = ตัววัดความแออัดของมวลชน"""
-    # ประตู 1: Binance fapi (เกิดมาเพื่อบอท ไม่คืน 202)
+def fetch_sentiment():
+    """วัดแรงบุกของมวลชน: สัดส่วน Taker Buy/Sell จากเทรดล่าสุดของ PAXG (OKX)"""
     try:
-        r = requests.get('https://futures.binance.com/fapi/v1/premiumIndex',
-                         params={'symbol': 'PAXGUSDT'},
-                         headers={'User-Agent': feedparser.USER_AGENT},
-                         timeout=15)
-        if r.status_code == 200:
-            rate = float(r.json().get('lastFundingRate', 0)) * 100
-            print("Sentiment via: binance funding ->", round(rate, 4), "%")
-            return rate
-        print("Sentiment binance funding: HTTP", r.status_code)
-    except Exception as e:
-        print("Sentiment binance funding error:", e)
-
-    # ประตู 2: OKX
-    try:
-        r = requests.get('https://www.okx.com/api/v5/public/funding-rate',
-                         params={'instId': 'PAXG-USDT-SWAP'},
+        r = requests.get('https://www.okx.com/api/v5/market/trades',
+                         params={'instId': 'PAXG-USDT', 'limit': '300'},
                          headers={'User-Agent': feedparser.USER_AGENT},
                          timeout=15)
         if r.status_code == 200:
             data = r.json().get('data', [])
-            if data:
-                rate = float(data[0].get('fundingRate', 0)) * 100
-                print("Sentiment via: okx funding ->", round(rate, 4), "%")
-                return rate
-        print("Sentiment okx funding: HTTP", r.status_code)
+            if not data:
+                print("Sentiment okx: ข้อมูลว่าง (อาจไม่มีคู่ PAXG-USDT)")
+                return None
+            buy = sum(float(t.get('sz', 0)) for t in data if t.get('side') == 'buy')
+            sell = sum(float(t.get('sz', 0)) for t in data if t.get('side') == 'sell')
+            total = buy + sell
+            if total <= 0:
+                print("Sentiment okx: ปริมาณเทรดเป็น 0")
+                return None
+            lp = round(100 * buy / total)
+            sp = 100 - lp
+            print("Sentiment via: okx flow ->", (lp, sp))
+            return (lp, sp)
+        print("Sentiment okx: HTTP", r.status_code)
     except Exception as e:
-        print("Sentiment okx funding error:", e)
-
+        print("Sentiment okx error:", e)
     print("Sentiment: ทุกประตูปิดสนิท")
     return None
 
 
-def crowd_state(rate):
-    if rate is None:
+def crowd_state(long_pct):
+    if long_pct is None:
         return None
-    if rate >= CROWDED:
+    if long_pct >= CROWDED:
         return 'CROWDED_BUY'
-    if rate <= -CROWDED:
+    if long_pct <= 100 - CROWDED:
         return 'CROWDED_SELL'
     return 'BALANCED'
 
 
-def crowd_label(state, rate):
-    if rate is None:
+def crowd_label(state, senti):
+    if senti is None:
         return "👥 มวลชน: (ดึงข้อมูลไม่ได้)"
-    if state == 'CROWDED_BUY':
-        return f"👥 Funding PAXG: +{rate:.4f}% → มวลชนแออัด Long (ยอมจ่ายแพงเพื่อถือซื้อ!)"
-    if state == 'CROWDED_SELL':
-        return f"👥 Funding PAXG: {rate:.4f}% → มวลชนแออัด Short (ยอมจ่ายแพงเพื่อถือขาย!)"
-    return f"👥 Funding PAXG: {rate:+.4f}% → สมดุล (ปกติ ~0.01%)"
+    lp, sp = senti
+    name = {'BALANCED': 'สมดุล', 'CROWDED_BUY': 'ฝั่งซื้อบุกหนัก!',
+            'CROWDED_SELL': 'ฝั่งขายบุกหนัก!'}.get(state, '-')
+    return f"👥 Flow มวลชนทอง (OKX): ซื้อ {lp}% / ขาย {sp}% → {name}"
 
 
 def combined_verdict(direction, state):
@@ -160,8 +152,8 @@ def send_telegram(message):
 
 def scan_news():
     seen = load_seen()
-    rate = fetch_funding()
-    state = crowd_state(rate)
+    senti = fetch_sentiment()
+    state = crowd_state(senti[0] if senti else None)
 
     alerts = []
     total_impact = 0
@@ -211,22 +203,23 @@ def scan_news():
     time_str = now_th.strftime("%d/%m/%Y %H:%M") + " (เวลาไทย)"
 
     # ---------- โหมด CONTRARIAN ----------
-    if not alerts and rate is not None and abs(rate) >= EXTREME \
-            and state in ('CROWDED_BUY', 'CROWDED_SELL'):
+    if not alerts and senti and state in ('CROWDED_BUY', 'CROWDED_SELL') \
+            and (senti[0] >= EXTREME or senti[0] <= 100 - EXTREME):
         last = load_json(CROWD_FILE)
         if last != state:
             save_json(CROWD_FILE, state)
+            lp, sp = senti
             if state == 'CROWDED_BUY':
-                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN MODE\n"
-                       f"Funding พุ่ง +{rate:.4f}% = มวลชนแออัด Long สุดขั้วโดยไม่มีข่าวหนุน\n"
+                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN MODE\n"
+                       f"ฝั่งซื้อบุกหนักสุดขั้ว {lp}% โดยไม่มีข่าวแรงหนุน\n"
                        "⚠️ Smart Money อาจทุบลงกินสภาพคล่องก่อน\n"
                        "💡 มองหา Sell ตอนดีด / อย่าไล่ Buy\n")
             else:
-                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN MODE\n"
-                       f"Funding ดิ่ง {rate:.4f}% = มวลชนแออัด Short สุดขั้วโดยไม่มีข่าวกด\n"
+                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN MODE\n"
+                       f"ฝั่งขายบุกหนักสุดขั้ว {sp}% โดยไม่มีข่าวแรงกด\n"
                        "⚠️ Smart Money อาจดีดขึ้นกินสภาพคล่องก่อน\n"
                        "💡 มองหา Buy ตอนย่อ / อย่าไล่ Sell\n")
-            msg += crowd_label(state, rate) + "\n"
+            msg += crowd_label(state, senti) + "\n"
             msg += "━━━━━━━━━━━━━━━\n⏰ " + time_str + "\n"
             msg += "💡 นี่คือการแจ้งเตือนข้อมูล ไม่ใช่คำสั่งซื้อขาย ตั้ง SL เสมอ"
             send_telegram(msg)
@@ -256,11 +249,11 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.5\n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.6\n"
     msg += level + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += dir_txt + "\n"
-    msg += crowd_label(state, rate) + "\n"
+    msg += crowd_label(state, senti) + "\n"
     msg += combined_verdict(direction, state) + "\n"
     msg += "━━━━━━━━━━━━━━━\n"
     for i, (impact, title, link, g, hav, dov, hawk) in enumerate(alerts[:5], 1):
