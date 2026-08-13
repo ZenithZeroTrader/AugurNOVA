@@ -4,12 +4,13 @@ import os
 import json
 import hashlib
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.2.3 (Phase 2: Sentiment)
+# AUGURNOVA - GOLD MODE v1.2.4 (Phase 2: Sentiment)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
-# + มวลชนจาก API กระดานเทรด (Binance/Bybit) สดทุก 5 นาที
+# + มวลชน Binance (retry เมื่อ 202) + มุมมอง Top Traders
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -76,48 +77,48 @@ def find_words(text, words):
     return [w for w in words if re.search(r'\b' + re.escape(w), text)]
 
 
+def _binance_ratio(path, period):
+    url = 'https://futures.binance.com/futures/data/' + path
+    for attempt in range(2):  # เจอ 202 ให้รอแล้วเคาะซ้ำ 1 ครั้ง
+        try:
+            r = requests.get(url,
+                             params={'symbol': 'PAXGUSDT',
+                                     'period': period, 'limit': 1},
+                             headers={'User-Agent': feedparser.USER_AGENT},
+                             timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data and isinstance(data, list) and 'longAccount' in data[0]:
+                    lp = round(float(data[0]['longAccount']) * 100)
+                    sp = round(float(data[0]['shortAccount']) * 100)
+                    return (lp, sp)
+                print(f"Sentiment {path}: ข้อมูลว่าง")
+                return None
+            elif r.status_code == 202:
+                print(f"Sentiment {path}/{period}: (202) กำลังเตรียมข้อมูล... retry")
+                time.sleep(3)
+                continue
+            else:
+                print(f"Sentiment {path}/{period}: HTTP", r.status_code)
+                return None
+        except Exception as e:
+            print(f"Sentiment {path}/{period} error:", e)
+            return None
+    return None
+
+
 def fetch_sentiment():
-    """มวลชนสายเก็งกำไรทอง: อัตราส่วน Long/Short ของ PAXGUSDT (สดทุก 5 นาที)"""
-    # ประตู 1: Binance
-    try:
-        r = requests.get(
-            'https://futures.binance.com/futures/data/globalLongShortAccountRatio',
-            params={'symbol': 'PAXGUSDT', 'period': '5m', 'limit': 1},
-            headers={'User-Agent': feedparser.USER_AGENT}, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            if data and isinstance(data, list) and 'longAccount' in data[0]:
-                lp = round(float(data[0]['longAccount']) * 100)
-                sp = round(float(data[0]['shortAccount']) * 100)
-                print("Sentiment via: binance ->", (lp, sp))
-                return (lp, sp)
-            print("Sentiment binance: ไม่มีข้อมูล PAXGUSDT")
-        else:
-            print("Sentiment binance: HTTP", r.status_code)
-    except Exception as e:
-        print("Sentiment binance error:", e)
-
-    # ประตู 2: Bybit
-    try:
-        r = requests.get(
-            'https://api.bybit.com/v5/market/account-ratio',
-            params={'category': 'linear', 'symbol': 'PAXGUSDT',
-                    'period': '5min', 'limit': 1},
-            headers={'User-Agent': feedparser.USER_AGENT}, timeout=15)
-        if r.status_code == 200:
-            j = r.json()
-            lst = j.get('result', {}).get('list', [])
-            if lst and 'buyRatio' in lst[0]:
-                lp = round(float(lst[0]['buyRatio']) * 100)
-                sp = round(float(lst[0]['sellRatio']) * 100)
-                print("Sentiment via: bybit ->", (lp, sp))
-                return (lp, sp)
-            print("Sentiment bybit: ไม่มีข้อมูล PAXGUSDT")
-        else:
-            print("Sentiment bybit: HTTP", r.status_code)
-    except Exception as e:
-        print("Sentiment bybit error:", e)
-
+    doors = [
+        ('มวลชนทั้งหมด', 'globalLongShortAccountRatio', '5m'),
+        ('มวลชนทั้งหมด', 'globalLongShortAccountRatio', '15m'),
+        ('ท็อปเทรดเดอร์', 'topLongShortAccountRatio', '15m'),
+        ('ท็อปโพสิชัน', 'topLongShortPositionRatio', '15m'),
+    ]
+    for name, path, period in doors:
+        result = _binance_ratio(path, period)
+        if result:
+            print(f"Sentiment via: binance [{name}] {period} ->", result)
+            return result
     print("Sentiment: ทุกประตูปิดสนิท")
     return None
 
@@ -232,7 +233,7 @@ def scan_news():
                        "⚠️ Smart Money อาจทุบลงกินสภาพคล่องก่อน\n"
                        "💡 มองหา Sell ตอนดีด / อย่าไล่ Buy\n")
             else:
-                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN MODE\n"
+                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN MODE\n"
                        f"มวลชนแออัด SELL สุดขั้ว {sp}% โดยไม่มีข่าวแรงกด\n"
                        "⚠️ Smart Money อาจดีดขึ้นกินสภาพคล่องก่อน\n"
                        "💡 มองหา Buy ตอนย่อ / อย่าไล่ Sell\n")
@@ -266,7 +267,7 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.3\n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.4\n"
     msg += level + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += dir_txt + "\n"
