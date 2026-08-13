@@ -4,13 +4,14 @@ import os
 import json
 import hashlib
 import re
+import time
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.2.1 (Phase 2: Sentiment)
+# AUGURNOVA - GOLD MODE v1.2.2 (Phase 2: Sentiment)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
-# + แผนที่กับดักมวลชน แบบลอง 3 ประตู (anti-block)
+# + 5 ประตูข้อมูลมวลชน + แคช 30 นาที (มารยาทดี)
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -44,6 +45,8 @@ RSS_FEEDS = [
 SENTIMENT_URL = 'https://www.myfxbook.com/community/outlook/XAUUSD'
 SEEN_FILE = 'seen_gold_v2.json'
 CROWD_FILE = 'seen_crowd.json'
+SENTI_CACHE = 'seen_senti.json'
+SENTI_TTL = 600
 TH_TZ = timezone(timedelta(hours=7))
 
 CROWDED = 70
@@ -88,11 +91,12 @@ def _parse_myfxbook(html):
 
 
 def fetch_sentiment():
-    """ลองเคาะ 3 ประตู ตามลำดับ ประตูไหนเปิดใช้อันนั้น"""
     doors = [
         ('direct', SENTIMENT_URL),
         ('jina-reader', 'https://r.jina.ai/' + SENTIMENT_URL),
         ('allorigins', 'https://api.allorigins.win/raw?url=' + quote(SENTIMENT_URL)),
+        ('corsproxy', 'https://corsproxy.io/?url=' + quote(SENTIMENT_URL)),
+        ('codetabs', 'https://api.codetabs.com/v1/proxy/?quest=' + quote(SENTIMENT_URL)),
     ]
     headers = {'User-Agent': feedparser.USER_AGENT,
                'Accept-Language': 'en-US,en;q=0.9'}
@@ -111,6 +115,17 @@ def fetch_sentiment():
             print(f"Sentiment {name} error:", e)
     print("Sentiment: ทุกประตูปิดสนิท")
     return None
+
+
+def get_sentiment():
+    cached = load_json(SENTI_CACHE)
+    if cached and (time.time() - cached.get('time', 0) < SENTI_TTL):
+        print("Sentiment: ใช้ค่าแคช", cached.get('data'))
+        return tuple(cached.get('data'))
+    data = fetch_sentiment()
+    if data:
+        save_json(SENTI_CACHE, {'time': time.time(), 'data': list(data)})
+    return data
 
 
 def crowd_state(long_pct):
@@ -160,7 +175,7 @@ def send_telegram(message):
 
 def scan_news():
     seen = load_seen()
-    senti = fetch_sentiment()
+    senti = get_sentiment()
     state = crowd_state(senti[0] if senti else None)
 
     alerts = []
@@ -257,7 +272,7 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.1\n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.2\n"
     msg += level + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += dir_txt + "\n"
