@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.4 (ฉบับอ่าน 3 วินาที)
+# AUGURNOVA - GOLD MODE v1.7 (3 เกียร์ เริ่มที่ 15)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
 # --------------------------------------------------
 
@@ -181,7 +181,7 @@ def scan_news():
                 bonus = 5 if gold_hit else 0
 
                 impact = up_score + down_score + bonus
-                if impact >= 5:
+                if impact >= 10:
                     total_impact += impact
                     total_up += up_score
                     total_down += down_score
@@ -195,7 +195,7 @@ def scan_news():
     now_th = datetime.now(TH_TZ)
     time_str = now_th.strftime("%d/%m/%Y %H:%M")
 
-    # ---------- CONTRARIAN (ฉบับย่อ) ----------
+    # ---------- CONTRARIAN ----------
     if not alerts and senti and state in ('CROWDED_BUY', 'CROWDED_SELL') \
             and (senti[0] >= EXTREME or senti[0] <= 100 - EXTREME):
         last = load_json(CROWD_FILE)
@@ -203,7 +203,7 @@ def scan_news():
             save_json(CROWD_FILE, state)
             lp, sp = senti
             if state == 'CROWDED_BUY':
-                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN\n"
+                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN\n"
                        f"👥 Flow : buy แออัด {lp}% (ไม่มีข่าวหนุน)\n"
                        "🧠 คำตัดสิน : ระวังทุบลงกิน stop → มอง Sell ตอนดีด\n")
             else:
@@ -216,17 +216,17 @@ def scan_news():
             return
     save_json(CROWD_FILE, state if state else 'NONE')
 
-    # ---------- โหมดปกติ ----------
-    if not alerts or total_impact < 5:
-        print("No gold-related panic news. Market calm.")
+    # ---------- โหมดปกติ (ส่งเฉพาะ Score >= 15) ----------
+    if not alerts or total_impact < 15:
+        print("No strong gold news. Market calm.")
         return
 
-    if total_impact >= 30:
-        level = "🚨 CRITICAL กราฟกระชากแรง"
-    elif total_impact >= 15:
-        level = "⚠️ HIGH ข่าวถี่ผิดปกติ"
+    if total_impact >= 60:
+        level = "🚨 CRITICAL พายุใหญ่สุดขั้ว"
+    elif total_impact >= 30:
+        level = "⚠️ HIGH พายุเข้า"
     else:
-        level = "⚡ SCALP ข่าวเขย่าTFเล็ก"
+        level = "⚡ MEDIUM ข่าวแรง"
 
     if total_up - total_down >= 10:
         direction = 'up'
@@ -238,7 +238,7 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ นิ่ง : สองแรงดึง"
 
-    msg = "🧙‍️ AUGURNOVA \n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇\n"
     msg += f"{level} | Score {total_impact}\n"
     msg += dir_txt + "\n"
     msg += crowd_label(state, senti) + "\n"
