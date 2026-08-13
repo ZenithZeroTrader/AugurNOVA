@@ -7,8 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.7 (3 เกียร์ เริ่มที่ 15)
-# "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
+# AUGURNOVA - GOLD MODE v1.7 (ข่าวเท่านั้น)
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -34,16 +33,11 @@ HAWK_WORDS = ['rate hike', 'hike', 'hawkish', 'higher rate', 'yields rise',
 
 RSS_FEEDS = [
     'https://www.forexlive.com/feed/',
-    'https://www.fxstreet.com/rss',
     'https://www.investing.com/rss/news_25.rss',
-    'https://www.kitco.com/rss',
 ]
 
-CROWD_FILE = 'seen_crowd.json'
+SEEN_FILE = 'seen_gold_v2.json'
 TH_TZ = timezone(timedelta(hours=7))
-
-CROWDED = 70
-EXTREME = 75
 
 
 def load_json(path):
@@ -62,7 +56,7 @@ def save_json(path, data):
 
 
 def load_seen():
-    s = load_json('seen_gold_v2.json')
+    s = load_json(SEEN_FILE)
     return set(s) if s else set()
 
 
@@ -73,64 +67,6 @@ def article_id(entry):
 
 def find_words(text, words):
     return [w for w in words if re.search(r'\b' + re.escape(w), text)]
-
-
-def fetch_sentiment():
-    try:
-        r = requests.get('https://www.okx.com/api/v5/market/trades',
-                         params={'instId': 'PAXG-USDT', 'limit': '300'},
-                         headers={'User-Agent': feedparser.USER_AGENT},
-                         timeout=15)
-        if r.status_code == 200:
-            data = r.json().get('data', [])
-            if not data:
-                print("Sentiment okx: ข้อมูลว่าง")
-                return None
-            buy = sum(float(t.get('sz', 0)) for t in data if t.get('side') == 'buy')
-            sell = sum(float(t.get('sz', 0)) for t in data if t.get('side') == 'sell')
-            total = buy + sell
-            if total <= 0:
-                return None
-            lp = round(100 * buy / total)
-            print("Sentiment via: okx flow ->", (lp, 100 - lp))
-            return (lp, 100 - lp)
-        print("Sentiment okx: HTTP", r.status_code)
-    except Exception as e:
-        print("Sentiment okx error:", e)
-    return None
-
-
-def crowd_state(long_pct):
-    if long_pct is None:
-        return None
-    if long_pct >= CROWDED:
-        return 'CROWDED_BUY'
-    if long_pct <= 100 - CROWDED:
-        return 'CROWDED_SELL'
-    return 'BALANCED'
-
-
-def crowd_label(state, senti):
-    if senti is None:
-        return "👥 Flow : -"
-    lp, sp = senti
-    if state == 'CROWDED_BUY':
-        return f"👥 Flow : buy แออัด {lp}%!"
-    if state == 'CROWDED_SELL':
-        return f"👥 Flow : sell แออัด {sp}%!"
-    return f"👥 Flow : สมดุล (ซื้อ{lp}/ขาย{sp})"
-
-
-def action_line(direction, state):
-    v = {
-        ('up', 'BALANCED'): "มอง Buy เมื่อชนโซนของคุณ",
-        ('up', 'CROWDED_BUY'): "ขึ้นได้แต่ระวังเขย่าลงก่อน รอ sweep จบค่อย Buy",
-        ('up', 'CROWDED_SELL'): "เชื้อ squeeze เพียบ ทางขึ้นอาจแรง มอง Buy ตอนย่อ",
-        ('down', 'BALANCED'): "มอง Sell เมื่อชนโซนของคุณ",
-        ('down', 'CROWDED_SELL'): "ลงได้แต่ระวังดีดขึ้นก่อน รอเขย่าจบค่อย Sell",
-        ('down', 'CROWDED_BUY'): "เชื้อล้างพอร์ตเพียบ ทางลงอาจแรง มอง Sell ตอนดีด",
-    }.get((direction, state), "สองแรงดึง รอแท่งยืนยัน")
-    return "🧠 คำตัดสิน : " + v
 
 
 def send_telegram(message):
@@ -145,9 +81,6 @@ def send_telegram(message):
 
 def scan_news():
     seen = load_seen()
-    senti = fetch_sentiment()
-    state = crowd_state(senti[0] if senti else None)
-
     alerts = []
     total_impact = 0
     total_up = 0
@@ -190,33 +123,11 @@ def scan_news():
         except Exception as e:
             print("Feed error:", feed_url, e)
 
-    save_json('seen_gold_v2.json', list(seen)[-500:])
+    save_json(SEEN_FILE, list(seen)[-500:])
 
     now_th = datetime.now(TH_TZ)
     time_str = now_th.strftime("%d/%m/%Y %H:%M")
 
-    # ---------- CONTRARIAN ----------
-    if not alerts and senti and state in ('CROWDED_BUY', 'CROWDED_SELL') \
-            and (senti[0] >= EXTREME or senti[0] <= 100 - EXTREME):
-        last = load_json(CROWD_FILE)
-        if last != state:
-            save_json(CROWD_FILE, state)
-            lp, sp = senti
-            if state == 'CROWDED_BUY':
-                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN\n"
-                       f"👥 Flow : buy แออัด {lp}% (ไม่มีข่าวหนุน)\n"
-                       "🧠 คำตัดสิน : ระวังทุบลงกิน stop → มอง Sell ตอนดีด\n")
-            else:
-                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN\n"
-                       f"👥 Flow : sell แออัด {sp}% (ไม่มีข่าวกด)\n"
-                       "🧠 คำตัดสิน : ระวังดีดขึ้นกิน stop → มอง Buy ตอนย่อ\n")
-            msg += "━━━━━━\n⏰ " + time_str + " | 💡 ตั้ง SL เสมอ"
-            send_telegram(msg)
-            print("Contrarian alert sent!")
-            return
-    save_json(CROWD_FILE, state if state else 'NONE')
-
-    # ---------- โหมดปกติ (ส่งเฉพาะ Score >= 15) ----------
     if not alerts or total_impact < 15:
         print("No strong gold news. Market calm.")
         return
@@ -224,7 +135,7 @@ def scan_news():
     if total_impact >= 60:
         level = "🚨 CRITICAL พายุใหญ่สุดขั้ว"
     elif total_impact >= 30:
-        level = "⚠️ HIGH พายุเข้า"
+        level = "️ HIGH พายุเข้า"
     else:
         level = "⚡ MEDIUM ข่าวแรง"
 
@@ -238,12 +149,17 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ นิ่ง : สองแรงดึง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇\n"
-    msg += f"{level} | Score {total_impact}\n"
-    msg += dir_txt + "\n"
-    msg += crowd_label(state, senti) + "\n"
-    msg += action_line(direction, state) + "\n"
-    msg += "━━━━━━\n"
+    action = {
+        ('up', 'BALANCED'): "มอง Buy เมื่อชนโซนของคุณ",
+        ('up', 'CROWDED_BUY'): "ขึ้นได้แต่ระวังเขย่าลงก่อน รอ sweep จบค่อย Buy",
+        ('up', 'CROWDED_SELL'): "เชื้อ squeeze เพียบ ทางขึ้นอาจแรง มอง Buy ตอนย่อ",
+        ('down', 'BALANCED'): "มอง Sell เมื่อชนโซนของคุณ",
+        ('down', 'CROWDED_SELL'): "ลงได้แต่ระวังดีดขึ้นก่อน รอเขย่าจบค่อย Sell",
+        ('down', 'CROWDED_BUY'): "เชื้อล้างพอร์ตเพียบ ทางลงอาจแรง มอง Sell ตอนดีด",
+    }.get((direction, 'BALANCED'), "สองแรงดึง รอแท่งยืนยัน")
+
+    msg = f"‍♂️ AUGURNOVA \n{level} | Score {total_impact}\n{dir_txt}\n🧠 คำตัดสิน : {action}\n━━━━━━\n"
+    
     for i, (impact, title, link, g, hav, dov, hawk) in enumerate(alerts[:3], 1):
         tags = []
         if g:
@@ -254,10 +170,9 @@ def scan_news():
             tags.append("🕊️ " + ", ".join(dov))
         if hawk:
             tags.append("⬇️ " + ", ".join(hawk))
-        msg += f"{i}. {title} {' | '.join(tags)}\n"
-        msg += f"   {link}\n"
-    msg += "━━━━━━\n"
-    msg += "⏰ " + time_str + " | 💡 ตั้ง SL เสมอ"
+        msg += f"{i}. {title} {' | '.join(tags)}\n   {link}\n"
+    
+    msg += f"━━━━━━\n⏰ {time_str} | 💡 ตั้ง SL เสมอ"
 
     send_telegram(msg)
     print("Alert sent! Impact:", total_impact)
