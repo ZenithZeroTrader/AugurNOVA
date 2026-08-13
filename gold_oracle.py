@@ -7,9 +7,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 # --------------------------------------------------
-# AUGURNOVA - GOLD MODE v1.2.6 (Phase 2: Sentiment)
+# AUGURNOVA - GOLD MODE v1.3 (Phase 1+2 ฉบับสมบูรณ์)
 # "นักพยากรณ์ผู้จับจังหวะก่อนทองระเบิด"
-# + Flow มวลชนจากเทรดจริง PAXG (OKX) — ประตูที่กันบอทไม่ได้
+# + 3 เกียร์สัญญาณ + คำอธิบายในข้อความ + Flow มวลชน OKX
 # --------------------------------------------------
 
 feedparser.USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,6 +45,8 @@ TH_TZ = timezone(timedelta(hours=7))
 
 CROWDED = 70
 EXTREME = 75
+
+LEGEND = "📖 เกียร์สัญญาณ: 🚨≥30 พายุเข้า | ⚠️≥15 เตรียมตัว | ⚡≥5 เขย่าTFเล็ก"
 
 
 def load_json(path):
@@ -188,7 +190,7 @@ def scan_news():
                 bonus = 5 if gold_hit else 0
 
                 impact = up_score + down_score + bonus
-                if impact >= 10:
+                if impact >= 5:  # เกียร์ SCALP: รับข่าวเบาด้วย
                     total_impact += impact
                     total_up += up_score
                     total_down += down_score
@@ -210,7 +212,7 @@ def scan_news():
             save_json(CROWD_FILE, state)
             lp, sp = senti
             if state == 'CROWDED_BUY':
-                msg = ("🧙‍♂️ AUGURNOVA 🥇 CONTRARIAN MODE\n"
+                msg = ("🧙‍️ AUGURNOVA  CONTRARIAN MODE\n"
                        f"ฝั่งซื้อบุกหนักสุดขั้ว {lp}% โดยไม่มีข่าวแรงหนุน\n"
                        "⚠️ Smart Money อาจทุบลงกินสภาพคล่องก่อน\n"
                        "💡 มองหา Sell ตอนดีด / อย่าไล่ Buy\n")
@@ -233,11 +235,17 @@ def scan_news():
         return
 
     if total_impact >= 30:
-        level = "🚨 CRITICAL - ข่าวกระทบทองแรงมาก! ระวังกราฟกระชาก"
+        level = "🚨 CRITICAL - พายุเข้า! ข่าวแรงหลายด้าน กราฟอาจกระชากแรง"
+        meaning = ("📖 ความหมาย: หลีกเลี่ยงการไล่ราคา รอการสะบัดจบ "
+                   "แล้วให้โซนของคุณเป็นคนตัดสิน")
     elif total_impact >= 15:
-        level = "⚠️ HIGH - ข่าวกระทบทองถี่ผิดปกติ เตรียมตัว"
+        level = "⚠️ HIGH - ข่าวถี่ผิดปกติ เตรียมตัวให้พร้อม"
+        meaning = ("📖 ความหมาย: ตลาดมีเชื้อแรง รอราคาวิ่งเข้าโซนของคุณ "
+                   "แล้วค่อยง้างออเดอร์")
     else:
-        level = "⚡ MEDIUM - เริ่มมีข่าวกระทบทอง เฝ้าจอไว้"
+        level = "⚡ SCALP WATCH - ข่าวเบา พอเขย่า M1/M5 ได้ (สายscalping)"
+        meaning = ("📖 ความหมาย: แรงพอให้สแคปได้เฉพาะเมื่อราคาชนโซนของคุณ "
+                   "ถ้าไม่มีโซนตรงหน้า นั่งทับมือไว้")
 
     if total_up - total_down >= 10:
         direction = 'up'
@@ -249,8 +257,9 @@ def scan_news():
         direction = 'mixed'
         dir_txt = "↔️ 'สองแรงดึง' : ข่าวสวนทางกัน กราฟอาจสวิงแรง"
 
-    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.2.6\n"
+    msg = "🧙‍♂️ AUGURNOVA 🥇 GOLD MODE v1.3\n"
     msg += level + "\n"
+    msg += meaning + "\n"
     msg += f"Gold Impact Score: {total_impact}\n"
     msg += dir_txt + "\n"
     msg += crowd_label(state, senti) + "\n"
@@ -270,6 +279,7 @@ def scan_news():
         msg += "   " + " | ".join(tags) + f" (impact {impact})\n"
         msg += f"   {link}\n"
     msg += "━━━━━━━━━━━━━━━\n"
+    msg += LEGEND + "\n"
     msg += "⏰ " + time_str + "\n"
     msg += "💡 นี่คือการแจ้งเตือนข้อมูล ไม่ใช่คำสั่งซื้อขาย ตั้ง SL เสมอ"
 
