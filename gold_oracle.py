@@ -222,11 +222,11 @@ def scan_news():
         return
 
     if total_impact >= 30:
-        level = "🚨 CRITICAL พายุเข้า กราฟกระชากแรง"
+        level = "🚨 CRITICAL กราฟกระชากแรง"
     elif total_impact >= 15:
         level = "⚠️ HIGH ข่าวถี่ผิดปกติ"
     else:
-        level = "⚡ SCALP ข่าวเบา เขย่าTFเล็ก"
+        level = "⚡ SCALP ข่าวเขย่าTFเล็ก"
 
     if total_up - total_down >= 10:
         direction = 'up'
